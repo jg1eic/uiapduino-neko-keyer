@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ネコキーヤー</title>
+<style>
+  :root { --bg:#fff8ef; --card:#ffffff; --ink:#3b2f2f; --sub:#8a7a6a; --acc:#e8833a; --acc2:#c96a22; --line:#ecdcc8; --ok:#2e9e5b; --ng:#d6453d; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#1f1a17; --card:#2a2420; --ink:#f2e8dc; --sub:#a39482; --acc:#f0954f; --acc2:#f7aa6e; --line:#3d332c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:"Hiragino Sans","Yu Gothic UI",system-ui,sans-serif; line-height:1.6; }
+  main { max-width:720px; margin:0 auto; padding:20px 16px 48px; }
+  h1 { font-size:1.5rem; margin:0 0 4px; }
+  h1 span { font-size:1.8rem; }
+  .sub { color:var(--sub); font-size:.9rem; margin:0 0 18px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:14px; }
+  .card h2 { font-size:1rem; margin:0 0 10px; }
+  .warn { display:none; background:#fff1e0; border:1px solid var(--acc); color:#7a3d00; border-radius:10px; padding:10px 14px; margin-bottom:14px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .dot { width:10px; height:10px; border-radius:50%; background:#aaa; }
+  .dot.on { background:var(--ok); }
+  button { font:inherit; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:8px; padding:8px 16px; cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--acc); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.main { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
+  button.main:hover:not(:disabled) { background:var(--acc2); }
+  textarea { width:100%; font:inherit; font-size:1.2rem; letter-spacing:.04em; border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--bg); color:var(--ink); resize:vertical; min-height:84px; text-transform:uppercase; }
+  textarea:focus { outline:2px solid var(--acc); }
+  .hint { color:var(--sub); font-size:.8rem; margin-top:6px; }
+  .hint.bad { color:var(--ng); }
+  .speed { display:flex; align-items:center; gap:12px; }
+  .speed input[type=range] { flex:1; accent-color:var(--acc); }
+  .speed output { min-width:7ch; font-variant-numeric:tabular-nums; }
+  #view { font-size:1.5rem; letter-spacing:.08em; word-break:break-all; min-height:2.2em; padding:8px 4px; }
+  #view .c { display:inline-block; padding:0 2px; border-radius:4px; }
+  #view .c.now { background:var(--acc); color:#fff; }
+  #view .c.done { color:var(--sub); }
+  #view .sp { display:inline-block; width:.6em; }
+  #morse { font-family:ui-monospace,Consolas,monospace; color:var(--sub); font-size:.85rem; word-break:break-all; }
+  #log { height:130px; overflow:auto; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 10px; font-family:ui-monospace,Consolas,monospace; font-size:.78rem; color:var(--sub); }
+  label.chk { display:inline-flex; gap:6px; align-items:center; cursor:pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1><span>🐱</span> ネコキーヤー</h1>
+  <p class="sub">好きな文字を入れて「打たせる」を押すと、ネコがパドルを打ちます。(UIAPduino / WebHID)</p>
+
+  <div id="warn" class="warn">このページは <strong>Chrome</strong> か <strong>Edge</strong> で開いてください。Firefox・Safari では WebHID が使えません。</div>
+
+  <div class="card">
+    <h2>1. ネコをつなぐ</h2>
+    <div class="row">
+      <span class="dot" id="dot"></span><span id="status">未接続</span>
+      <button class="main" id="btnConnect">ネコを選んで接続</button>
+      <button id="btnDisconnect" disabled>切断</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>2. 打たせる文字</h2>
+    <textarea id="text" maxlength="200" spellcheck="false" placeholder="例: CQ CQ DE (コールサイン)">HELLO NEKO</textarea>
+    <div class="hint" id="hint">英数字と . , ? / - ( ) + @ : ; = が使えます(200文字まで)。小文字は大文字になります。</div>
+    <div id="morse"></div>
+  </div>
+
+  <div class="card">
+    <h2>3. 速さ</h2>
+    <div class="speed">
+      <span>ゆっくり</span>
+      <input type="range" id="wpm" min="5" max="30" value="20">
+      <span>はやい</span>
+      <output id="wpmOut"></output>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="chk"><input type="checkbox" id="loop"> くりかえす</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button class="main" id="btnPlay" disabled>▶ 打たせる</button>
+      <button id="btnStop" disabled>■ とめる</button>
+    </div>
+    <div id="view"></div>
+  </div>
+
+  <div class="card">
+    <h2>ログ</h2>
+    <div id="log"></div>
+  </div>
+</main>
+
+<script>
+'use strict';
+
+// ==CORE== (画面に依存しない部分。テストでここだけ取り出して動かします)
+const VID = 0x1209, PID = 0xD004;
+const MAX_TEXT = 200;
+
+const MORSE = {
+  A:'.-',B:'-...',C:'-.-.',D:'-..',E:'.',F:'..-.',G:'--.',H:'....',I:'..',J:'.---',K:'-.-',L:'.-..',M:'--',
+  N:'-.',O:'---',P:'.--.',Q:'--.-',R:'.-.',S:'...',T:'-',U:'..-',V:'...-',W:'.--',X:'-..-',Y:'-.--',Z:'--..',
+  '0':'-----','1':'.----','2':'..---','3':'...--','4':'....-','5':'.....','6':'-....','7':'--...','8':'---..','9':'----.',
+  '.':'.-.-.-',',':'--..--','?':'..--..','/':'-..-.','-':'-....-','(':'-.--.',')':'-.--.-','+':'.-.-.','@':'.--.-.',
+  ':':'---...',';':'-.-.-.','=':'-...-'
+};
+
+// 入力を整える: 大文字化・改行や連続空白を1つの空白に・対応外の文字を取り除く・前後の空白を削る
+function normalize(raw) {
+  let text = '', dropped = [];
+  for (const ch of raw.toUpperCase().replace(/\s+/g, ' ')) {
+    if (ch === ' ' || MORSE[ch]) text += ch;
+    else if (!dropped.includes(ch)) dropped.push(ch);
+  }
+  text = text.replace(/ +/g, ' ').trim().slice(0, MAX_TEXT);
+  return { text, dropped };
+}
+
+const wpmToUnit = (wpm) => Math.round(1200 / wpm);
+
+// 送るパケットを組み立てる。reportSize は Feature Report のバイト数(基板が 32 と答える)
+function buildPackets(text, wpm, loop, reportSize) {
+  const pk = [];
+  const mk = (...b) => { const a = new Uint8Array(reportSize); b.forEach((v, i) => a[i] = v); return a; };
+  pk.push(mk(0x10, wpmToUnit(wpm), loop ? 1 : 0));
+  const room = reportSize - 2;
+  for (let i = 0; i < text.length; i += room) {
+    const part = text.slice(i, i + room);
+    const a = mk(0x11, part.length);
+    for (let j = 0; j < part.length; j++) a[2 + j] = part.charCodeAt(j);
+    pk.push(a);
+  }
+  pk.push(mk(0x12));
+  return pk;
+}
+
+const morseOf = (text) => [...text].map(c => c === ' ' ? '/' : (MORSE[c] || '')).join(' ');
+// ==/CORE==
+
+const $ = (id) => document.getElementById(id);
+const els = { dot:$('dot'), status:$('status'), connect:$('btnConnect'), disc:$('btnDisconnect'), text:$('text'),
+  hint:$('hint'), morse:$('morse'), wpm:$('wpm'), wpmOut:$('wpmOut'), loop:$('loop'), play:$('btnPlay'),
+  stop:$('btnStop'), view:$('view'), log:$('log'), warn:$('warn') };
+
+let device = null;
+let reportSize = 32;
+let busy = false;
+
+function log(msg) {
+  const t = new Date().toTimeString().slice(0, 8);
+  els.log.insertAdjacentHTML('beforeend', `<div>${t} ${msg}</div>`);
+  els.log.scrollTop = els.log.scrollHeight;
+}
+
+function refresh() {
+  const { text, dropped } = normalize(els.text.value);
+  els.morse.textContent = morseOf(text);
+  els.hint.classList.toggle('bad', dropped.length > 0);
+  els.hint.textContent = dropped.length
+    ? `使えない文字は送られません: ${dropped.join(' ')}`
+    : '英数字と . , ? / - ( ) + @ : ; = が使えます(200文字まで)。小文字は大文字になります。';
+  const wpm = +els.wpm.value;
+  els.wpmOut.textContent = `${wpm} WPM`;
+  renderView(text, -1);
+  els.play.disabled = !device || busy || text.length === 0;
+}
+
+function renderView(text, pos) {
+  els.view.innerHTML = [...text].map((c, i) => {
+    if (c === ' ') return '<span class="sp"></span>';
+    const cls = i === pos ? 'now' : (pos >= 0 && i < pos ? 'done' : '');
+    return `<span class="c ${cls}">${c}</span>`;
+  }).join('');
+}
+
+function setConnected(dev) {
+  device = dev;
+  els.dot.classList.add('on');
+  els.status.textContent = `接続中: ${dev.productName || 'UIAPduino'}`;
+  els.connect.disabled = true;
+  els.disc.disabled = false;
+  els.stop.disabled = false;
+  refresh();
+}
+function setDisconnected() {
+  device = null;
+  els.dot.classList.remove('on');
+  els.status.textContent = '未接続';
+  els.connect.disabled = false;
+  els.disc.disabled = true;
+  els.stop.disabled = true;
+  refresh();
+}
+
+// 送信は EP0 が詰まりやすいので、少し待ちながら数回やり直す(公式ページと同じ考え方)
+async function sendReport(data) {
+  const waits = [20, 50, 100, 200, 200];
+  for (let i = 0; ; i++) {
+    try { await device.sendFeatureReport(0, data); return; }
+    catch (e) {
+      if (i >= waits.length) throw e;
+      await new Promise(r => setTimeout(r, waits[i]));
+    }
+  }
+}
+
+function onInput(e) {
+  const d = new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength);
+  switch (d[0]) {
+    case 0x61: renderView(playedText, d[1]); break;       // d[1] 番目の文字を打ち始めた
+    case 0x62: log('打ち終わりました'); renderView(playedText, playedText.length); break;
+    case 0x63: log(`ネコが ${d[1]} 文字を受け取りました`); break;
+    case 0x64: log('止めました'); renderView(playedText, -1); break;
+  }
+}
+let playedText = '';
+
+async function play() {
+  const { text } = normalize(els.text.value);
+  if (!device || !text) return;
+  busy = true; els.play.disabled = true;
+  try {
+    playedText = text;
+    const pk = buildPackets(text, +els.wpm.value, els.loop.checked, reportSize);
+    for (const p of pk) { await sendReport(p); await new Promise(r => setTimeout(r, 10)); }
+    log(`送信: "${text}" (${els.wpm.value} WPM)`);
+  } catch (e) { log(`送信エラー: ${e.message}`); }
+  busy = false; refresh();
+}
+
+async function stop() {
+  if (!device) return;
+  try { await sendReport(buildStop()); } catch (e) { log(`エラー: ${e.message}`); }
+}
+function buildStop() { const a = new Uint8Array(reportSize); a[0] = 0x13; return a; }
+
+async function connect() {
+  try {
+    const list = await navigator.hid.requestDevice({
+      filters: [{ vendorId: VID, productId: PID, usagePage: 0xFF00, usage: 0x01 }]
+    });
+    if (!list.length) return;
+    const dev = list[0];
+    if (!dev.opened) await dev.open();
+    // 基板が登録している Feature Report のサイズを読み取る(32 バイトのはず)
+    for (const col of dev.collections) {
+      const fr = col.featureReports?.find(r => r.reportId === 0);
+      if (fr) { reportSize = Math.ceil(fr.items.reduce((s, it) => s + it.reportSize * it.reportCount, 0) / 8) || 32; break; }
+    }
+    dev.addEventListener('inputreport', onInput);
+    setConnected(dev);
+    log(`接続しました (Feature Report ${reportSize} バイト)`);
+  } catch (e) { log(`接続エラー: ${e.message}`); }
+}
+
+async function disconnect() {
+  if (!device) return;
+  try { device.removeEventListener('inputreport', onInput); await device.close(); } catch (_) {}
+  setDisconnected();
+}
+
+if (!navigator.hid) { els.warn.style.display = 'block'; els.connect.disabled = true; }
+else navigator.hid.addEventListener('disconnect', (e) => { if (device && e.device === device) { setDisconnected(); log('抜かれました'); } });
+
+els.connect.addEventListener('click', connect);
+els.disc.addEventListener('click', disconnect);
+els.play.addEventListener('click', play);
+els.stop.addEventListener('click', stop);
+els.text.addEventListener('input', refresh);
+els.wpm.addEventListener('input', async () => {
+  refresh();
+  // 打っている最中でも速さだけ変えられる
+  if (device) { const a = new Uint8Array(reportSize); a[0] = 0x14; a[1] = wpmToUnit(+els.wpm.value); try { await sendReport(a); } catch (_) {} }
+});
+window.addEventListener('beforeunload', () => { if (device?.opened) device.close(); });
+refresh();
+</script>
+</body>
+</html>

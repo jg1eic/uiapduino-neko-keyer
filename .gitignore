@@ -1,0 +1,21 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Arduino build output
+build/
+*.elf
+*.bin
+*.hex
+*.map
+
+# Local test builds
+e2e
+host_test
