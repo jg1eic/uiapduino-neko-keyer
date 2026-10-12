@@ -88,6 +88,15 @@
   </div>
 
   <div class="card">
+    <h2>4. ネコに覚えさせる</h2>
+    <div class="row">
+      <button id="btnSave" disabled>💾 この文字を覚えさせる</button>
+      <button id="btnForget" disabled>覚えた文字を消す</button>
+    </div>
+    <div class="hint">覚えさせると、PC につながず USB 充電器やモバイルバッテリーで電源を入れたときに、その文字を今の速さでくりかえし打ちます。</div>
+  </div>
+
+  <div class="card">
     <h2>ログ</h2>
     <div id="log"></div>
   </div>
@@ -122,7 +131,8 @@ function normalize(raw) {
 const wpmToUnit = (wpm) => Math.round(1200 / wpm);
 
 // 送るパケットを組み立てる。reportSize は Feature Report のバイト数(基板が 32 と答える)
-function buildPackets(text, wpm, loop, reportSize) {
+// last は最後に送るコマンド: 0x12 PLAY(打たせる) / 0x15 SAVE(覚えさせる)
+function buildPackets(text, wpm, loop, reportSize, last = 0x12) {
   const pk = [];
   const mk = (...b) => { const a = new Uint8Array(reportSize); b.forEach((v, i) => a[i] = v); return a; };
   pk.push(mk(0x10, wpmToUnit(wpm), loop ? 1 : 0));
@@ -133,7 +143,7 @@ function buildPackets(text, wpm, loop, reportSize) {
     for (let j = 0; j < part.length; j++) a[2 + j] = part.charCodeAt(j);
     pk.push(a);
   }
-  pk.push(mk(0x12));
+  pk.push(mk(last));
   return pk;
 }
 
@@ -143,7 +153,7 @@ const morseOf = (text) => [...text].map(c => c === ' ' ? '/' : (MORSE[c] || ''))
 const $ = (id) => document.getElementById(id);
 const els = { dot:$('dot'), status:$('status'), connect:$('btnConnect'), disc:$('btnDisconnect'), text:$('text'),
   hint:$('hint'), morse:$('morse'), wpm:$('wpm'), wpmOut:$('wpmOut'), loop:$('loop'), play:$('btnPlay'),
-  stop:$('btnStop'), view:$('view'), log:$('log'), warn:$('warn') };
+  stop:$('btnStop'), view:$('view'), log:$('log'), warn:$('warn'), save:$('btnSave'), forget:$('btnForget') };
 
 let device = null;
 let reportSize = 32;
@@ -166,6 +176,8 @@ function refresh() {
   els.wpmOut.textContent = `${wpm} WPM`;
   renderView(text, -1);
   els.play.disabled = !device || busy || text.length === 0;
+  els.save.disabled = !device || busy || text.length === 0;
+  els.forget.disabled = !device || busy;
 }
 
 function renderView(text, pos) {
@@ -214,6 +226,11 @@ function onInput(e) {
     case 0x62: log('打ち終わりました'); renderView(playedText, playedText.length); break;
     case 0x63: log(`ネコが ${d[1]} 文字を受け取りました`); break;
     case 0x64: log('止めました'); renderView(playedText, -1); break;
+    case 0x65:                                             // SAVE の結果 [ok, 文字数]
+      if (!d[1]) log('覚えられませんでした');
+      else if (d[2]) log(`ネコが ${d[2]} 文字を覚えました。電源だけつなぐと、くりかえし打ちます`);
+      else log('覚えた文字を消しました');
+      break;
   }
 }
 let playedText = '';
@@ -227,6 +244,18 @@ async function play() {
     const pk = buildPackets(text, +els.wpm.value, els.loop.checked, reportSize);
     for (const p of pk) { await sendReport(p); await new Promise(r => setTimeout(r, 10)); }
     log(`送信: "${text}" (${els.wpm.value} WPM)`);
+  } catch (e) { log(`送信エラー: ${e.message}`); }
+  busy = false; refresh();
+}
+
+// 文字を送って Flash に保存させる。text が空なら保存を消す
+async function save(text) {
+  if (!device) return;
+  busy = true; refresh();
+  try {
+    const pk = buildPackets(text, +els.wpm.value, false, reportSize, 0x15);
+    for (const p of pk) { await sendReport(p); await new Promise(r => setTimeout(r, 10)); }
+    log(text ? `覚えさせる: "${text}" (${els.wpm.value} WPM)` : '覚えた文字を消します');
   } catch (e) { log(`送信エラー: ${e.message}`); }
   busy = false; refresh();
 }
@@ -269,6 +298,8 @@ els.connect.addEventListener('click', connect);
 els.disc.addEventListener('click', disconnect);
 els.play.addEventListener('click', play);
 els.stop.addEventListener('click', stop);
+els.save.addEventListener('click', () => save(normalize(els.text.value).text));
+els.forget.addEventListener('click', () => { if (confirm('ネコが覚えた文字を消しますか?')) save(''); });
 els.text.addEventListener('input', refresh);
 els.wpm.addEventListener('input', async () => {
   refresh();
